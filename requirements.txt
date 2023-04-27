@@ -1,4 +1,5 @@
 boto3
-s3pathlib
-pathlib_mate
+boto_session_manager==1.4.3
+s3pathlib==1.4.1
+pathlib_mate==1.2.1
 git-remote-codecommit

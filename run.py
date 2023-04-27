@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import typing as T
 import subprocess
 from datetime import datetime, timezone
 
@@ -7,20 +8,21 @@ from boto_session_manager import BotoSesManager
 from s3pathlib import S3Path, context
 
 # ------------------------------------------------------------------------------
-# update this code build to customize the behavior
+# update this code block to customize the configuration
+
 # where you want to store your backup?
 backup_bucket = "bmt-app-dev-us-east-1-important-backup"
+
+# This should match the definition in the backup S3 bucket policy and
+# the CodeBuild IAM role. The last aws_account_id is the AWS account ID
+# where the CodeCommit repo is located.
 backup_folder = "projects/codecommit-backup/807388292768"
 
 # list of repos you want to back up.
+
+# TODO: currently it only support explicit enumeration, will add regex support
 repo_list = [
     "codecommit-backup",
-    "aws_ami_with_packer-project",
-    "datalab_cookiecutter_api-project",
-    "wserver_ami-project",
-    "wserver_backup-project",
-    "wserver_ops-project",
-    "wserver_controller-project",
 ]
 
 # you keep at least last N backup for each repo
@@ -31,7 +33,32 @@ retention_period = 30  # days
 # ------------------------------------------------------------------------------
 
 
-def backup_one_repo(repo_name):
+def get_repo_list(
+    bsm: BotoSesManager,
+    repo_list: T.List[str],
+) -> T.List[str]:
+    """
+    This method determines the list of repos to backup.
+
+    TODO: currently it only support explicit enumeration, will add regex support
+    """
+    if len(repo_list) == 0:
+        paginator = bsm.codecommit_client.get_paginator("list_repositories")
+        repo_list = list()
+        for res in paginator.paginate(
+            PaginationConfig={"MaxItems": 1000},
+        ):
+            for dct in res.get("repositories", []):
+                repo_list.append(dct["repositoryName"])
+        return repo_list
+    else:
+        return repo_list
+
+
+def backup_one_repo(
+    bsm: BotoSesManager,
+    repo_name: str,
+):
     # clone repo
     repo_arn = f"arn:aws:codecommit:{bsm.aws_region}:{bsm.aws_account_id}:{repo_name}"
     print(f"clone repo {repo_arn}")
@@ -72,7 +99,7 @@ def backup_one_repo(repo_name):
 
     if len(s3path_list) > keep_at_least:
         s3path: S3Path
-        for s3path in s3path_list[3:]:
+        for s3path in s3path_list[keep_at_least:]:
             if (now - s3path.last_modified_at).total_seconds() >= (
                 retention_period * 24 * 60 * 60
             ):
@@ -83,12 +110,10 @@ if __name__ == "__main__":
     bsm = BotoSesManager()
     context.attach_boto_session(bsm.boto_ses)
     now = datetime.utcnow().replace(tzinfo=timezone.utc)
-    for repo_name in repo_list:
+    for repo_name in get_repo_list(bsm=bsm, repo_list=repo_list):
         print(f"try to backup {repo_name!r}")
         try:
-            backup_one_repo(
-                repo_name=repo_name,
-            )
+            backup_one_repo(bsm=bsm, repo_name=repo_name)
             print("  succeeded!")
         except Exception as e:
             print(f"  failed!")
